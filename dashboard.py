@@ -609,12 +609,14 @@ def main():
         lon = beach_coords["lon"]
         beach_name = beach_coords["name"]
         
-        # Check if beach selection changed
+        # Check if beach selection changed and trigger auto-fetch
         if 'current_beach' in st.session_state and st.session_state.current_beach != beach_name:
-            st.success(f"🏖️ Switched to {beach_name}! Click 'Fetch Latest Data' to get updated forecast.")
-            # Clear previous data when beach changes
+            st.success(f"🏖️ Switched to {beach_name}! Fetching updated forecast...")
+            # Clear previous data when beach changes and trigger fetch
             if 'marine_data' in st.session_state:
                 del st.session_state.marine_data
+            # Auto-fetch data for new beach
+            st.session_state.fetch_data = True
         
 
         
@@ -623,10 +625,26 @@ def main():
             st.subheader("📍 Custom Coordinates")
             lat = st.number_input("Latitude", value=32.08, format="%.2f", step=0.01, key="custom_lat")
             lon = st.number_input("Longitude", value=34.77, format="%.2f", step=0.01, key="custom_lon")
+            
+            # Check if custom coordinates changed and trigger auto-fetch
+            if ('current_lat' in st.session_state and 'current_lon' in st.session_state and 
+                (abs(st.session_state.current_lat - lat) > 0.001 or abs(st.session_state.current_lon - lon) > 0.001)):
+                # Clear data if coordinates changed and trigger fetch
+                if 'marine_data' in st.session_state:
+                    del st.session_state.marine_data
+                st.session_state.fetch_data = True
         
         # Forecast settings
         st.subheader("📅 Forecast Settings")
         forecast_days = st.slider("Forecast Days", min_value=1, max_value=7, value=7)
+        
+        # Check if forecast days changed and trigger auto-fetch
+        if ('current_forecast_days' in st.session_state and 
+            st.session_state.current_forecast_days != forecast_days):
+            # Clear data if forecast days changed and trigger fetch
+            if 'marine_data' in st.session_state:
+                del st.session_state.marine_data
+            st.session_state.fetch_data = True
 
         
         # Date range selector
@@ -660,26 +678,14 @@ def main():
         
         if st.button("📥 Export Data"):
             st.session_state.export_data = True
-    
-    # Main content area - Fetch button at the top
-    st.markdown("---")
-    
-    # Prominent fetch button at the top
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("🚀 **FETCH LATEST DATA**", type="primary", use_container_width=True):
-            st.session_state.fetch_data = True
-            # Clear previous data to force refresh
+            # Trigger immediate export if data exists
             if 'marine_data' in st.session_state:
-                del st.session_state.marine_data
-        st.caption("Click above to get the latest marine weather forecast")
-    
-    st.markdown("---")
+                st.rerun()
+    # Main content area - Fetch button at the top
     
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.markdown("### 📊 Current Forecast Period")
         
         # Beautiful forecast info card
         st.markdown(f"""
@@ -727,44 +733,9 @@ def main():
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-            else:
-                st.markdown("""
-                <div style="
-                    background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
-                    padding: 1rem 1.5rem;
-                    border-radius: 1rem;
-                    color: white;
-                    box-shadow: 0 6px 20px rgba(76, 175, 80, 0.3);
-                    margin: 1rem 0;
-                    text-align: center;
-                    border: 2px solid rgba(255,255,255,0.2);
-                ">
-                    <div style="display: flex; align-items: center; justify-content: center; gap: 0.5rem;">
-                        <span style="font-size: 1.3rem;">✅</span>
-                        <span style="font-size: 1.1rem; font-weight: 600; font-family: 'Poppins', sans-serif;">
-                            Data is current for selected location.
-                        </span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
     
     with col2:
-        # Check if parameters have changed
-        params_changed = (
-            'current_lat' not in st.session_state or
-            'current_lon' not in st.session_state or
-            'current_beach' not in st.session_state or
-            'current_forecast_days' not in st.session_state or
-            st.session_state.get('current_lat') != lat or
-            st.session_state.get('current_lon') != lon or
-            st.session_state.get('current_beach') != beach_name or
-            st.session_state.get('current_forecast_days') != forecast_days
-        )
-        
-        if params_changed:
-            st.info("🔄 Parameters changed! Click 'Fetch Latest Data' to update.")
-        
-        # Auto-fetch or manual fetch
+        # Auto-fetch logic - data fetches automatically when parameters change
         should_fetch = ('fetch_data' in st.session_state and st.session_state.fetch_data) or ('auto_fetch' in st.session_state and st.session_state.auto_fetch)
         
         if should_fetch:
@@ -836,6 +807,44 @@ def main():
                         
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
+    
+    # Handle export for existing data
+    if 'export_data' in st.session_state and st.session_state.export_data and 'marine_data' in st.session_state:
+        data_to_export = st.session_state.marine_data
+        processed_data = data_to_export['processed_data']
+        
+        try:
+            if export_format == "Excel":
+                extractor = MarineWeatherExtractor()
+                extractor.save_to_excel(data_to_export, "dashboard_export.xlsx")
+                st.success("📥 Data exported to Excel!")
+            elif export_format == "JSON":
+                extractor = MarineWeatherExtractor()
+                extractor.save_to_file(data_to_export, "dashboard_export.json")
+                st.success("📥 Data exported to JSON!")
+            elif export_format == "CSV":
+                # Create CSV export
+                df = pd.DataFrame()
+                for date, hourly_data in processed_data.items():
+                    for hour_data in hourly_data:
+                        row = {
+                            'date': date,
+                            'hour': hour_data['hour'],
+                            'wave_height': hour_data['wave_height'],
+                            'wave_direction': hour_data['wave_direction'],
+                            'wind_wave_height': hour_data['wind_wave_height'],
+                            'wind_wave_direction': hour_data['wind_wave_direction'],
+                            'swell_wave_height': hour_data['swell_wave_height'],
+                            'swell_wave_direction': hour_data['swell_wave_direction'],
+                            'swell_wave_period': hour_data['swell_wave_period']
+                        }
+                        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+                df.to_csv("dashboard_export.csv", index=False)
+                st.success("📥 Data exported to CSV!")
+            
+            st.session_state.export_data = False
+        except Exception as e:
+            st.error(f"❌ Export failed: {str(e)}")
     
     # Display data if available
     if 'marine_data' in st.session_state:
@@ -1591,7 +1600,7 @@ def main():
         
         # Sample data preview
         st.markdown("### 📊 Sample Data Preview")
-        st.info("Click 'Fetch Latest Data' to see real-time marine weather information!")
+        st.info("Select a beach from the sidebar to automatically fetch real-time marine weather information!")
         
         # Forecast benefits
         st.markdown("### 🎯 Forecast Benefits")
